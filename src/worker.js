@@ -2,44 +2,12 @@ const WEBHOOK_URL = "https://flow-webhooks.k8s.eu.codecreationlabs.cloud/webhook
 
 export default {
   async fetch(request, env) {
-    if (request.method !== "POST") {
-      return json(
-        { success: false, error: "Method not allowed. Please use POST." },
-        405
-      );
-    }
-
-    let body;
     try {
-      body = await request.json();
-    } catch {
-      return json(
-        {
-          success: false,
-          error: "Invalid request. Please check your data and try again.",
-        },
-        400
-      );
-    }
+      const body = await request.json();
+      const { customer_id, outputs, feature } = body;
+      const numOutputs = Number(outputs);
 
-    const { customer_id, outputs, feature } = body;
-
-    if (customer_id === undefined || customer_id === null) {
-      return json({ success: false, error: "Customer ID is required." }, 400);
-    }
-    if (outputs === undefined || outputs === null || isNaN(Number(outputs))) {
-      return json(
-        { success: false, error: "A valid number of outputs is required." },
-        400
-      );
-    }
-    if (!feature) {
-      return json({ success: false, error: "Feature is required." }, 400);
-    }
-
-    const numOutputs = Number(outputs);
-
-    try {
+      // Trusting the payload, straight to the database lookups
       const customerRow = await env.DB_BINDING.prepare(
         `SELECT
            Customer_ID,
@@ -51,47 +19,29 @@ export default {
         .bind(customer_id)
         .first();
 
-      if (!customerRow) {
-        return json({ success: false, error: "Customer not found." }, 404);
-      }
-
-      const currentBalance = parseFloat(customerRow.balance) || 0;
-      const customerIdMeta =
-        customerRow.customer_id_meta || String(customer_id);
-
       const costRow = await env.DB_BINDING.prepare(
         `SELECT "PER CLICK", "MAX OUTPUTS" FROM costs WHERE FEATURE = ?`
       )
         .bind(feature)
         .first();
 
-      if (!costRow) {
-        return json(
-          { success: false, error: "This feature is not available." },
-          404
-        );
+      // The only limit check you wanted to keep
+      if (costRow["MAX OUTPUTS"] > 0 && numOutputs > costRow["MAX OUTPUTS"]) {
+        return new Response(`This action exceeds the maximum allowed outputs of ${costRow["MAX OUTPUTS"]}.`, { status: 400 });
       }
 
+      const currentBalance = parseFloat(customerRow.balance) || 0;
+      const customerIdMeta = customerRow.customer_id_meta || String(customer_id);
       const perClickCost = parseFloat(costRow["PER CLICK"]) || 0;
-      const maxOutputs = parseFloat(costRow["MAX OUTPUTS"]) || 0;
-
-      if (maxOutputs > 0 && numOutputs > maxOutputs) {
-        return json(
-          {
-            success: false,
-            error: `This action exceeds the maximum allowed outputs of ${maxOutputs}.`,
-          },
-          400
-        );
-      }
 
       const amountDeducted = numOutputs * perClickCost;
       const newBalance = currentBalance - amountDeducted;
 
       if (newBalance < 0) {
-        return json({ success: false, error: "Insufficient funds." }, 402);
+        return new Response("Insufficient funds.", { status: 402 });
       }
 
+      // Update the database
       await env.DB_BINDING.prepare(
         `UPDATE mytable
          SET
@@ -110,32 +60,24 @@ export default {
         )
         .run();
 
+      // Fire webhook
       await fetch(WEBHOOK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          BALANCE_customermetafieldscustombalance: String(newBalance),
-          CUSTOMER_ID_customermetafieldscustomcustomer_id: customerIdMeta,
-          AMOUNT_DEDUCTED_customermetafieldscustomlast_spent:
-            String(amountDeducted),
-          PREVIOUS_BALANCE_customermetafieldscustomprevious_balance:
-            String(currentBalance),
+          fieldOne: String(newBalance),
+          fieldTwo: customerIdMeta,
+          fieldThree: String(amountDeducted),
+          fieldFour: String(currentBalance)
         }),
       });
 
-      return json({ success: true }, 200);
+      // Customer-facing success as raw text
+      return new Response("Success", { status: 200 });
+      
     } catch (err) {
-      return json(
-        { success: false, error: "Server error. Please try again later." },
-        500
-      );
+      // Customer-facing failure as raw text
+      return new Response("Server error. Please try again later.", { status: 500 });
     }
   },
 };
-
-function json(data, status) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
