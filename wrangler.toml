@@ -1,0 +1,8 @@
+name = "credit-check"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+[[d1_databases]]
+binding = "DB_BINDING"
+database_name = "tattty"
+database_id = "00a00a6a-a859-4e09-9655-44e5d1307b60"
