@@ -1,3 +1,5 @@
+const WEBHOOK_URL = "https://flow-webhooks.k8s.eu.codecreationlabs.cloud/webhook/wwe99hda";
+
 export default {
   async fetch(request, env) {
     if (request.method !== "POST") {
@@ -108,21 +110,18 @@ export default {
         )
         .run();
 
-      try {
-        await fetch(WEBHOOK_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            BALANCE_customermetafieldscustombalance: String(newBalance),
-            CUSTOMER_ID_customermetafieldscustomcustomer_id: customerIdMeta,
-            AMOUNT_DEDUCTED_customermetafieldscustomlast_spent:
-              String(amountDeducted),
-            PREVIOUS_BALANCE_customermetafieldscustomprevious_balance:
-              String(currentBalance),
-          }),
-        });
-      } catch {
-      }
+      await fetch(WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          BALANCE_customermetafieldscustombalance: String(newBalance),
+          CUSTOMER_ID_customermetafieldscustomcustomer_id: customerIdMeta,
+          AMOUNT_DEDUCTED_customermetafieldscustomlast_spent:
+            String(amountDeducted),
+          PREVIOUS_BALANCE_customermetafieldscustomprevious_balance:
+            String(currentBalance),
+        }),
+      });
 
       return json({ success: true }, 200);
     } catch (err) {
