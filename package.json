@@ -10,5 +10,10 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260729.1",
     "wrangler": "^4.115.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "agents": "^0.20.1",
+    "zod": "^4.4.3"
   }
 }

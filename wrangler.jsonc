@@ -4,6 +4,7 @@
   "workers_dev": true,
   "preview_urls": false,
   "compatibility_date": "2026-07-29",
+  "compatibility_flags": ["nodejs_compat"],
   "routes": [
     {
       "pattern": "credit-check.tattty.com",
