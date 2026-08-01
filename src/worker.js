@@ -18,25 +18,23 @@ function createServer(env) {
       inputSchema: {
         customer_id: z.string().describe("The customer ID"),
         outputs: z.string().describe("Number of outputs requested"),
-        feature: z.string().describe("The feature name to look up cost (where the call is coming from)"),
+        feature: z.string().describe("The feature name to look up cost"),
       },
     },
     async (params) => {
-      const customer_id = params.customer_id;
-      const numOutputs = Number(params.outputs);
-      const feature = params.feature;
+      const { customer_id, outputs, feature } = params;
+      const numOutputs = Number(outputs);
 
       const customerRow = await env.DB_BINDING.prepare(
-        `SELECT
-           Customer_ID,
-           BALANCE_customermetafieldscustombalance AS balance,
-           CUSTOMER_ID_customermetafieldscustomcustomer_id AS customer_id_meta
-         FROM mytable
-         WHERE Customer_ID = ?`
+        `SELECT Customer_ID, BALANCE_customermetafieldscustombalance AS balance, CUSTOMER_ID_customermetafieldscustomcustomer_id AS customer_id_meta FROM mytable WHERE Customer_ID = ?`
       ).bind(customer_id).first();
 
+      // FIX 1: Signal an actual error to the AI Orchestrator
       if (!customerRow) {
-        return { content: [{ type: "text", text: "Customer not found." }] };
+        return { 
+          isError: true, 
+          content: [{ type: "text", text: "Customer not found." }] 
+        };
       }
 
       const costRow = await env.DB_BINDING.prepare(
@@ -44,15 +42,16 @@ function createServer(env) {
       ).bind(feature).first();
 
       if (!costRow) {
-        return { content: [{ type: "text", text: "Feature not found." }] };
+        return { 
+          isError: true, 
+          content: [{ type: "text", text: "Feature not found." }] 
+        };
       }
 
       if (costRow["MAX OUTPUTS"] > 0 && numOutputs > costRow["MAX OUTPUTS"]) {
         return {
-          content: [{
-            type: "text",
-            text: `This action exceeds the maximum allowed outputs of ${costRow["MAX OUTPUTS"]}.`,
-          }],
+          isError: true,
+          content: [{ type: "text", text: `Exceeds max allowed outputs of ${costRow["MAX OUTPUTS"]}.` }],
         };
       }
 
@@ -63,24 +62,15 @@ function createServer(env) {
       const newBalance = currentBalance - amountDeducted;
 
       if (newBalance < 0) {
-        return { content: [{ type: "text", text: "Insufficient funds." }] };
+        return { 
+          isError: true, 
+          content: [{ type: "text", text: "Insufficient funds." }] 
+        };
       }
 
       await env.DB_BINDING.prepare(
-        `UPDATE mytable
-         SET
-           BALANCE_customermetafieldscustombalance = ?,
-           PREVIOUS_BALANCE_customermetafieldscustomprevious_balance = ?,
-           AMOUNT_DEDUCTED_customermetafieldscustomlast_spent = ?,
-           FEATURE_NAME_customermetafieldscustomfeature_name = ?
-         WHERE Customer_ID = ?`
-      ).bind(
-        String(newBalance),
-        String(currentBalance),
-        String(amountDeducted),
-        feature,
-        customer_id
-      ).run();
+        `UPDATE mytable SET BALANCE_customermetafieldscustombalance = ?, PREVIOUS_BALANCE_customermetafieldscustomprevious_balance = ?, AMOUNT_DEDUCTED_customermetafieldscustomlast_spent = ?, FEATURE_NAME_customermetafieldscustomfeature_name = ? WHERE Customer_ID = ?`
+      ).bind(String(newBalance), String(currentBalance), String(amountDeducted), feature, customer_id).run();
 
       await fetch(WEBHOOK_URL, {
         method: "POST",
@@ -94,10 +84,7 @@ function createServer(env) {
       });
 
       return {
-        content: [{
-          type: "text",
-          text: `Success. New balance: ${String(newBalance)}`,
-        }],
+        content: [{ type: "text", text: `Success. New balance: ${String(newBalance)}` }],
       };
     }
   );
@@ -113,20 +100,19 @@ function createServer(env) {
     },
     async (params) => {
       const customerRow = await env.DB_BINDING.prepare(
-        `SELECT
-           BALANCE_customermetafieldscustombalance AS balance
-         FROM mytable
-         WHERE Customer_ID = ?`
+        `SELECT BALANCE_customermetafieldscustombalance AS balance FROM mytable WHERE Customer_ID = ?`
       ).bind(params.customer_id).first();
 
+      // FIX 2: Signal an actual error to the AI Orchestrator
       if (!customerRow) {
-        return { content: [{ type: "text", text: "Customer not found." }] };
+        return { 
+          isError: true, 
+          content: [{ type: "text", text: "Customer not found." }] 
+        };
       }
 
-      const balance = String(customerRow.balance || "0");
-
       return {
-        content: [{ type: "text", text: balance }],
+        content: [{ type: "text", text: String(customerRow.balance || "0") }],
       };
     }
   );
@@ -138,31 +124,35 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // MCP endpoint
     if (url.pathname.startsWith("/mcp")) {
       return createMcpHandler(() => createServer(env))(request, env, ctx);
     }
 
-    // Original HTTP endpoint — keeps working as before
+    // --- HTTP ENDPOINT ---
     const body = await request.json();
     const { customer_id, outputs, feature } = body;
     const numOutputs = Number(outputs);
 
+    // FIX 3: Explicitly handle "Not Signed In" / "Not Found" for the HTTP call
     const customerRow = await env.DB_BINDING.prepare(
-      `SELECT
-         Customer_ID,
-         BALANCE_customermetafieldscustombalance AS balance,
-         CUSTOMER_ID_customermetafieldscustomcustomer_id AS customer_id_meta
-       FROM mytable
-       WHERE Customer_ID = ?`
+      `SELECT Customer_ID, BALANCE_customermetafieldscustombalance AS balance, CUSTOMER_ID_customermetafieldscustomcustomer_id AS customer_id_meta FROM mytable WHERE Customer_ID = ?`
     ).bind(customer_id).first();
+
+    if (!customerRow) {
+      // This is the "You are not signed in" error for the client
+      return new Response("Unauthorized", { status: 401 });
+    }
 
     const costRow = await env.DB_BINDING.prepare(
       `SELECT "PER CLICK", "MAX OUTPUTS" FROM costs WHERE FEATURE = ?`
     ).bind(feature).first();
 
+    if (!costRow) {
+      return new Response("Feature not found", { status: 404 });
+    }
+
     if (costRow["MAX OUTPUTS"] > 0 && numOutputs > costRow["MAX OUTPUTS"]) {
-      return new Response(`This action exceeds the maximum allowed outputs of ${costRow["MAX OUTPUTS"]}.`, { status: 400 });
+      return new Response(`Exceeds max allowed outputs of ${costRow["MAX OUTPUTS"]}.`, { status: 400 });
     }
 
     const currentBalance = parseFloat(customerRow.balance) || 0;
@@ -176,20 +166,8 @@ export default {
     }
 
     await env.DB_BINDING.prepare(
-      `UPDATE mytable
-       SET
-         BALANCE_customermetafieldscustombalance = ?,
-         PREVIOUS_BALANCE_customermetafieldscustomprevious_balance = ?,
-         AMOUNT_DEDUCTED_customermetafieldscustomlast_spent = ?,
-         FEATURE_NAME_customermetafieldscustomfeature_name = ?
-       WHERE Customer_ID = ?`
-    ).bind(
-      String(newBalance),
-      String(currentBalance),
-      String(amountDeducted),
-      feature,
-      customer_id
-    ).run();
+      `UPDATE mytable SET BALANCE_customermetafieldscustombalance = ?, PREVIOUS_BALANCE_customermetafieldscustomprevious_balance = ?, AMOUNT_DEDUCTED_customermetafieldscustomlast_spent = ?, FEATURE_NAME_customermetafieldscustomfeature_name = ? WHERE Customer_ID = ?`
+    ).bind(String(newBalance), String(currentBalance), String(amountDeducted), feature, customer_id).run();
 
     await fetch(WEBHOOK_URL, {
       method: "POST",
